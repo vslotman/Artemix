@@ -1,11 +1,11 @@
-
+import socket
 import struct
+import ArtNetModule
 from collections import Counter
-import simpleOSC
 
 class Decoder:
 
-	def __init__(self, sntFile, oscServer=[]):
+	def __init__(self, sntFile, ArtNetIP):
 		#the current Ship ID
 		self.shipId = 0
 		# ship stats
@@ -16,27 +16,55 @@ class Decoder:
 
 		#sizes of struct fmt types. struct.calcsize returns size including alignment which this seems to ignore sometimes
 		self.numLens = { 'f' : 4, 'h' : 2, 'i' : 4, 'b' : 1}
+		
+		#DMX initialisieren
+		self.DMXvalues = [0]*49 + [0,60,0]*37
+		self.ArtNetServerIP = ArtNetIP
+		self.DMXmapping = {
+						"013": 112, 
+						"026": 100, 
+						"029": 58, 
+						"031": 115, 
+						"033": 109, 
+						"036": 103, 
+						"039": 55, 
+						"121": 121, 
+						"127": 82, 
+						"129": 61, 
+						"131": 118, 
+						"210": 130, 
+						"212": 136, 
+						"219": 70, 
+						"221": 133, 
+						"227": 85, 
+						"228": 76, 
+						"230": 127, 
+						"239": 52, 
+						"240": 124, 
+						"247": 79, 
+						"248": 73, 
+						"321": 142, 
+						"327": 88, 
+						"329": 64, 
+						"331": 139, 
+						"413": 157, 
+						"426": 94, 
+						"429": 67, 
+						"431": 145, 
+						"433": 151, 
+						"436": 91, 
+						"439": 49, 
+
+                        }
+		self.s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+		
 		#load the ship data from the snt file
 		self.shipMap = self.loadShipData(sntFile) 
 		# nowe we know the coords of ship systems count the number of each
-		# this is sent to osc servers so that total damage of
 		# ship systems can be calculated.
 		# This is how the client does it... warp: 25% means 1 out of 4 nodes isnt
 		# damaged
 		self.systemCount = Counter(self.shipMap.values())
-
-		self.sendOSC = False
-		if len(oscServer) == 2:
-			print "start osc client.."
-			simpleOSC.initOSCClient(oscServer[0], oscServer[1])
-			print "done"
-			self.sendOSC = True
-
-
-	def sendOSCMessage(self, target, data=[]):
-		if self.sendOSC == True:
-			simpleOSC.sendOSCMsg(target, data)
-
 
 
 	'''
@@ -49,10 +77,12 @@ class Decoder:
 		maxZ = 9
 		x,y,z = 0,0,0
 		shipMap = {}
+		ship2d = [0 for i in range(50)]
+		value = x
 
 		namemap = ["Primary Beam", "Torpedo", "Tactical", "Maneuver", "Impulse", "Warp", "Front Shield", "Rear Shield"]
 		
-		print "loadint snt file.."
+		print "loading snt file.."
 		f = open(sntFile, "r")
 
 		for block in iter(lambda: f.read(32), ""):
@@ -61,9 +91,18 @@ class Decoder:
 
 			#print [ord(p) for p in block[12:] ], coords
 			if ord(block[12]) < 254:
-				print x,y,z, "=",namemap[ord(block[12])]
 				key = "%i%i%i"%(x,y,z)
+				print key,"=",namemap[ord(block[12])]				
 				shipMap[key] = namemap[ord(block[12])]
+			if ord(block[12]) == 255:
+                                key = "%i%i%i"%(x,y,z)
+                                print key,"=", "unmapped"				
+				shipMap[key] = "unmapped"
+			if ord(block[12]) != 254: 
+                                key2 = int("%i%i"%(x,z))
+                                ship2d[key2] += 1
+                                #print key2,ship2d[key2]
+			#print x,y,z,ord(block[12])
 			if z < maxZ:
 				z += 1
 			else:
@@ -75,6 +114,9 @@ class Decoder:
 					x += 1
 					x %= maxZ
 		print "..done"
+		print self.DMXmapping
+		ArtNetModule.ArtDMX_broadcast(self.DMXvalues, self.ArtNetServerIP)
+		print shipMap
 		return shipMap
 
 			
@@ -149,18 +191,15 @@ class Decoder:
 
 					v = self.decBitField(c)
 					a = self.decodePacket(c, message[36:],self.statMapHelm)
-					if self.sendOSC :
-						for stat in self.shipStats:
-							self.sendOSCMessage("/shipstate/" + stat, [self.shipStats[stat]])
+
 		elif messType == [0xc4, 0xd2, 0x3f, 0xb8]:
 			vals = None
 			try:
 				vals = struct.unpack("iiiiiiiiiii", message[24:])
 				if vals[2] == 1:
 					if vals[6] == self.shipId:
-						self.sendOSCMessage("/shiphit", [1])
 						print "WE GOT HIT!"
-				print "Damage from %i to %i" %(vals[5:7])
+						#print "Damageteam from %i to %i" %(vals[5:7])
 
 
 			except struct.error:
@@ -176,14 +215,12 @@ class Decoder:
 					ship = struct.unpack("i", message[28:32])[0]
 					print "ship asplode: ", ship
 					if ship == self.shipId:
-
-						self.sendOSCMessage("/shipdestroy",[1])
 						print "KABOOM SHIP ASPLODED!"
 
 		elif messType == [0x30, 0x3e, 0x5a, 0xcc]:
 			pass
 		elif messType == [0x3c,0x9f,0x7e,0x7]:
-			print "engineering packet"
+			#print "engineering packet"
 
 			if mess[21] == 255:
 				pass
@@ -195,17 +232,20 @@ class Decoder:
 
 					if ord(toDec[0]) != 255:
 						damage = struct.unpack("f", toDec[3:7])[0]
-						print "Subsystem damage " ,"--" * 20
+						#print "Subsystem damage " ,"--" * 20
 						x,y,z = [ord(p) for p in toDec[0:3]]
-						print ".. at x:%i y:%i z:%i - damage now: %f" %(x,y,z, damage)
+						#print ".. at x:%i y:%i z:%i - damage now: %f" %(x,y,z, damage)
 						try:
 							coord = "%i%i%i" % (x,y,z)
 							subName = self.shipMap[coord]
-							print "..which is mapped to ", subName
-							self.sendOSCMessage("/subdamage", [subName, coord, self.systemCount[subName], damage])
+							DMXstart = self.DMXmapping[coord]
+							print subName, DMXstart, coord, damage
+							self.DMXvalues[DMXstart] = int(damage*80)
+							self.DMXvalues[DMXstart+1] = int(60-(damage*60))
+							ArtNetModule.ArtDMX_broadcast(self.DMXvalues, self.ArtNetServerIP)
+							#print "..which is mapped to ", subName
 						except KeyError:
 							print "..not a mapped system"
-							self.sendOSCMessage("/subdamage", ["unmapped", coord, self.systemCount[subName], damage])
 
 					else:
 						break
@@ -215,7 +255,6 @@ class Decoder:
 
 		elif messType == [0x11, 0x67, 0xe6, 0x3d]:
 			print "SIM START", mess[20:]
-			self.sendOSCMessage("/simstart", [1])
 			self.shipId = 0
 
 

@@ -5,11 +5,11 @@ from Artemis import Decoder
 import select
 import argparse
 
-parser = argparse.ArgumentParser("ArtemisProxy : proxy between Artemis clients and server, forwards certain events to OSC server")
+parser = argparse.ArgumentParser("ArtemisProxy : proxy between Artemis clients and server, forwards certain events to ArtNet server")
 
 parser.add_argument("--serverip", type=str, help="Artemis server IP", required=True)
 parser.add_argument("--listenip", type=str, help="ip to listen for clients on", required=True)
-parser.add_argument("--oscserverip", type=str, help="OSC server IP", default="")
+parser.add_argument("--artnetserverip", type=str, help="ArtNet server IP", default="")
 parser.add_argument("--sntfile", type=str, help="snt file of ship being used", required=True)
 
 args = parser.parse_args()
@@ -25,7 +25,7 @@ selectionPacketSent = False
 serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 serversocket.bind((args.listenip, 2010))
 serversocket.listen(1)
-print "Waiting for connection from client on %s .." % (sys.argv[2])
+print "Waiting for connection from client on %s .." % (args.listenip)
 serverSock = None
 
 while True:
@@ -46,24 +46,11 @@ toServerSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 toServerSock.connect((serverip, 2010))
 
 print "..connected"
-
-#set up our decoder, check if OSC is being used first
-oscSettings = []
-if args.oscserverip != "":
-	addrParse = args.oscserverip.split(":")
-	addr = addrParse[0]
-	port = 12000
-	
-	if len(addrParse) == 2:
-		port = addrParse[1]	
-		oscSettings = [addr, int(port)]
-		print "using osc!"
-
 	
 
 print "setting up.."
 
-d = Decoder(args.sntfile,  oscSettings)
+d = Decoder(args.sntfile, args.artnetserverip)
 inputs = [toServerSock, toClientSock]
 outputs = []
 #data from artemis server to client
