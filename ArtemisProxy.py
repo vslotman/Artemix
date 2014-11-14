@@ -1,9 +1,14 @@
 import sys
 import time
 import socket
-from Artemis import Decoder
+from ArtemisProtocol import Decoder, Ship
+import Artemis
 import select
 import argparse
+import bitstring
+import struct
+#import logger
+from pprint import pprint
 
 parser = argparse.ArgumentParser("ArtemisProxy : proxy between Artemis clients and server, forwards certain events to ArtNet server")
 
@@ -13,9 +18,6 @@ parser.add_argument("--artnetserverip", type=str, help="ArtNet server IP", defau
 parser.add_argument("--sntfile", type=str, help="snt file of ship being used", required=True)
 
 args = parser.parse_args()
-
-
-
 
 serverip = args.serverip
 
@@ -29,10 +31,9 @@ print "Waiting for connection from client on %s .." % (args.listenip)
 serverSock = None
 
 while True:
-	(toClientSock, addr) = serversocket.accept()
-	print "got connection from ", addr
-	break
-
+    (toClientSock, addr) = serversocket.accept()
+    print "got connection from ", addr
+    break
 
 #packet header string
 
@@ -41,16 +42,14 @@ splitStr = "\xef\xbe\xad\xde"
 print "conecting to artemis server at", serverip
 toServerSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-
-
 toServerSock.connect((serverip, 2010))
 
 print "..connected"
-	
+
 
 print "setting up.."
 
-d = Decoder(args.sntfile, args.artnetserverip)
+ship = Ship(args.sntfile)
 inputs = [toServerSock, toClientSock]
 outputs = []
 #data from artemis server to client
@@ -65,53 +64,56 @@ print "..done! Here we go.."
 
 while(True):
 
-	(read, write, fucked) = select.select(inputs, [], [])
-	for r in read:
-		if r is toServerSock:
+    (read, write, fucked) = select.select(inputs, [], [])
+    for r in read:
+        if r is toServerSock:
 
-			#read the data from the server
-			buff = toServerSock.recv(256)
-		elif r is toClientSock:
-			#read the data from the client
-			fromClientBuff = toClientSock.recv(256)
-	#scan the buffer for the start string and length
-	packets = []
-	startPacket = -1
-	pktIndex = 0
-	while pktIndex < len(buff):
-		if buff[pktIndex : pktIndex + 4] == splitStr:
-			pktIndex += 4
-			if len(workingPacket) > 0:
-				packets.append(workingPacket)
-				workingPacket = ""
-		else:
-			workingPacket += buff[pktIndex]
-			pktIndex += 1
-	
-	for p in packets:
-		d.processPacket(p)
+            #read the data from the server
+            buff = toServerSock.recv(256)
+        elif r is toClientSock:
+            #read the data from the client
+            fromClientBuff = toClientSock.recv(256)
+    #scan the buffer for the start string and length
+    packets = []
+    startPacket = -1
+    pktIndex = 0
+    while pktIndex < len(buff):
+        if buff[pktIndex: pktIndex + 4] == splitStr:
+            if len(workingPacket) > 0:
+                packets.append(workingPacket)
+                workingPacket = ""
+            workingPacket += buff[pktIndex: pktIndex + 4]
+            pktIndex += 4
+        else:
+            workingPacket += buff[pktIndex]
+            pktIndex += 1
 
-	#now we've processed it we can forward data in its respective directions
-	if len(buff) > 0:
-		toClientSock.send(buff)
-		buff = ""
+    for p in packets:
+        #print '## PACKET #######################'
+        Pack = Decoder(ship, p)
 
 
-	if len(fromClientBuff) > 0:
-		toServerSock.send(fromClientBuff)
-		fromClientBuff = ""
+    #now we've processed it we can forward data in its respective directions
+    if len(buff) > 0:
+        toClientSock.send(buff)
+        buff = ""
+
+
+    if len(fromClientBuff) > 0:
+        toServerSock.send(fromClientBuff)
+        fromClientBuff = ""
 
 
 
 
-	
-		
-	
-	
 
-			
 
-			
+
+
+
+
+
+
 
 
 
