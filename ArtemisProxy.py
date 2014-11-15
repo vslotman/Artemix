@@ -1,107 +1,92 @@
-import sys
-import time
 import socket
 from ArtemisProtocol import Decoder, Ship
-import Artemis
 import select
 import argparse
-import bitstring
-import struct
-#import logger
 from pprint import pprint
 
-parser = argparse.ArgumentParser("ArtemisProxy : proxy between Artemis clients and server, forwards certain events to ArtNet server")
+SPLITSTR = "\xef\xbe\xad\xde"
 
-parser.add_argument("--serverip", type=str, help="Artemis server IP", required=True)
-parser.add_argument("--listenip", type=str, help="ip to listen for clients on", required=True)
-parser.add_argument("--artnetserverip", type=str, help="ArtNet server IP", default="")
-parser.add_argument("--sntfile", type=str, help="snt file of ship being used", required=True)
-
-args = parser.parse_args()
-
-serverip = args.serverip
-
-ktCount = 0
-selectionPacketSent = False
-
-serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-serversocket.bind((args.listenip, 2010))
-serversocket.listen(1)
-print "Waiting for connection from client on %s .." % (args.listenip)
-serverSock = None
-
-while True:
-    (toClientSock, addr) = serversocket.accept()
-    print "got connection from ", addr
-    break
-
-#packet header string
-
-splitStr = "\xef\xbe\xad\xde"
-
-print "conecting to artemis server at", serverip
-toServerSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-toServerSock.connect((serverip, 2010))
-
-print "..connected"
-
-
-print "setting up.."
-
-ship = Ship(args.sntfile)
-inputs = [toServerSock, toClientSock]
-outputs = []
-#data from artemis server to client
-buff = ""
-#data from artemis client to server
-fromClientBuff = ""
-
-#list of packets extracted from stream to client
-packets = []
-workingPacket = ""
-print "..done! Here we go.."
-
-while(True):
-
-    (read, write, fucked) = select.select(inputs, [], [])
-    for r in read:
-        if r is toServerSock:
-
-            #read the data from the server
-            buff = toServerSock.recv(256)
-        elif r is toClientSock:
-            #read the data from the client
-            fromClientBuff = toClientSock.recv(256)
-    #scan the buffer for the start string and length
-    packets = []
-    startPacket = -1
+def processdata(buff):
+    data = []
+    workingPacket = ""
     pktIndex = 0
     while pktIndex < len(buff):
-        if buff[pktIndex: pktIndex + 4] == splitStr:
+        if buff[pktIndex: pktIndex + 4] == SPLITSTR:
             if len(workingPacket) > 0:
-                packets.append(workingPacket)
+                data.append(workingPacket)
                 workingPacket = ""
             workingPacket += buff[pktIndex: pktIndex + 4]
             pktIndex += 4
         else:
             workingPacket += buff[pktIndex]
             pktIndex += 1
+    return data
 
-    for p in packets:
-        #print '## PACKET #######################'
-        Pack = Decoder(ship, p)
+def connect(serverip, serverport, listenip, listenport):
+    serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    serversocket.bind((listenip, listenport))
+    serversocket.listen(1)
+    print "Waiting for connection from client on %s:%s .." % (listenip, listenport)
+    #serverSock = None
+
+    (toClientSock, addr) = serversocket.accept()
+    print "got connection from ", addr
+
+    print "conecting to artemis server at", serverip
+    toServerSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    toServerSock.connect((serverip, serverport))
+    print "..connected"
+
+    return toServerSock, toClientSock
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser("ArtemisProxy : proxy between Artemis clients and server, forwards certain events to ArtNet server")
+
+    parser.add_argument("--serverip", type=str, help="Artemis server IP", required=True)
+    parser.add_argument("--serverport", type=int, help="Artemis server port", default=2010)
+    parser.add_argument("--listenip", type=str, help="ip to listen for clients on", required=True)
+    parser.add_argument("--listenport", type=int, help="port to listen for clients on", default=2010)
+    parser.add_argument("--artnetserverip", type=str, help="ArtNet server IP", default="")
+    parser.add_argument("--sntfile", type=str, help="snt file of ship being used", required=True)
+
+    args = parser.parse_args()
+
+    toServerSock, toClientSock = connect(args.serverip, args.serverport, args.listenip, args.listenport)
+    ship = Ship(args.sntfile)
+    inputs = [toServerSock, toClientSock]
+
+    #list of packets extracted from streams
+    packets = []
+    while(True):
+        snd_buff = ""
+        rcv_buff = ""
+
+        (read, write, fucked) = select.select(inputs, [], [])
+        packets = []
+        for r in read:
+            if r is toServerSock:
+                #read the data from the server
+                rcv_buff = toServerSock.recv(256)
+            elif r is toClientSock:
+                #read the data from the client
+                snd_buff = toClientSock.recv(256)
+
+            #scan the buffer for the start string and length
+            packets.extend(processdata(rcv_buff))
+            packets.extend(processdata(snd_buff))
+
+        #now we've processed it we can forward data in its respective directions
+        if len(rcv_buff) > 0:
+            toClientSock.send(rcv_buff)
+        if len(snd_buff) > 0:
+            toServerSock.send(snd_buff)
+
+        for p in packets:
+            #print '## PACKET #######################'
+            Pack = Decoder(ship, p)
 
 
-    #now we've processed it we can forward data in its respective directions
-    if len(buff) > 0:
-        toClientSock.send(buff)
-        buff = ""
 
-
-    if len(fromClientBuff) > 0:
-        toServerSock.send(fromClientBuff)
-        fromClientBuff = ""
 
 
 

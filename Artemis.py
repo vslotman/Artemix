@@ -14,6 +14,7 @@ class Ship:
 
     def __init__(self, sntFile):
         #load the ship data from the snt file
+        print "Setting up ship..."
         self.shipMap = self.loadShipData(sntFile)
         # nowe we know the coords of ship systems count the number of each
         # ship systems can be calculated.
@@ -33,7 +34,7 @@ class Ship:
 
         namemap = ["Primary Beam", "Torpedo", "Tactical", "Maneuver", "Impulse", "Warp", "Front Shield", "Rear Shield"]
 
-        print "loading snt file.."
+        print "Loading engineering-nodes from %s.." % sntFile
         f = open(sntFile, "r")
 
         for block in iter(lambda: f.read(32), ""):
